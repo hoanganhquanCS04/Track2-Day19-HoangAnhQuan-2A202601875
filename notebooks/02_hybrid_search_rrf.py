@@ -22,7 +22,7 @@ import json
 import statistics
 from pathlib import Path
 
-from fastembed import TextEmbedding
+from app.embeddings import Embedder, describe
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 from rank_bm25 import BM25Okapi
@@ -40,18 +40,22 @@ tokenized = [(d["title"] + " " + d["text"]).lower().split() for d in docs]
 bm25 = BM25Okapi(tokenized)
 
 # Vector
-embedder = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+# Same as NB1: model, device and dimension all come from .env. The whole point
+# of this notebook is that the embedding model is a VARIABLE -- re-run with
+# EMBEDDING_BACKEND=multilingual and compare the paraphrase slice.
+embedder = Embedder()
+print(describe())
 client = QdrantClient(":memory:")
 client.create_collection(
     collection_name="lab19",
-    vectors_config=VectorParams(size=384, distance=Distance.COSINE),
+    vectors_config=VectorParams(size=embedder.dim, distance=Distance.COSINE),
 )
 BATCH = 64
 points = []
 for start in range(0, len(docs), BATCH):
     batch = docs[start:start + BATCH]
     texts = [d["title"] + " " + d["text"] for d in batch]
-    vectors = list(embedder.embed(texts))
+    vectors = list(embedder.embed_documents(texts))
     for i, (d, v) in enumerate(zip(batch, vectors)):
         points.append(PointStruct(
             id=start + i, vector=v.tolist(),
@@ -75,7 +79,7 @@ def search_keyword(query: str, top_k: int = TOP_K) -> list[str]:
 
 
 def search_semantic(query: str, top_k: int = TOP_K) -> list[str]:
-    q_vec = next(embedder.embed([query])).tolist()
+    q_vec = next(embedder.embed_query([query])).tolist()
     res = client.query_points(collection_name="lab19", query=q_vec, limit=top_k)
     return [p.payload["doc_id"] for p in res.points]
 

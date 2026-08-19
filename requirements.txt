@@ -23,6 +23,9 @@ fastapi>=0.115,<1.0
 uvicorn[standard]>=0.32,<1.0
 httpx>=0.27,<1.0                       # for /search client + tests
 pydantic>=2.9,<3.0
+python-dotenv>=1.0,<2.0                # app/__init__.py loads .env; uvicorn[standard]
+                                       # pulls it in too, but relying on a transitive
+                                       # dependency for documented behaviour is fragile
 
 # Data
 polars>=1.13.2,<2.0                    # 1.13.1 was yanked

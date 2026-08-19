@@ -117,7 +117,8 @@ class Searcher:
         for start in range(0, len(self.docs), BATCH):
             batch = self.docs[start:start + BATCH]
             texts = [d["title"] + " " + d["text"] for d in batch]
-            vectors = list(self.embedder.embed(texts))
+            # documents -> passage side of the asymmetric pair (see app/embeddings.py)
+            vectors = list(self.embedder.embed_documents(texts))
             for i, (d, v) in enumerate(zip(batch, vectors)):
                 points.append(PointStruct(
                     id=start + i,
@@ -162,7 +163,8 @@ class Searcher:
 
     def _search_semantic(self, query: str, top_k: int) -> list[SearchHit]:
         assert self.client is not None and self.embedder is not None
-        q_vec = next(self.embedder.embed([query])).tolist()
+        # queries -> query side. Must match how the index was built.
+        q_vec = next(self.embedder.embed_query([query])).tolist()
         result = self.client.query_points(
             collection_name=COLLECTION,
             query=q_vec,

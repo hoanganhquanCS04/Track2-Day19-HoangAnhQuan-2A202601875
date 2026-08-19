@@ -23,6 +23,18 @@ from qdrant_client import QdrantClient, models
 CACHE_COLLECTION = "lab19_semantic_cache"
 
 
+def _embed_query(embedder, text: str):
+    """Question-side embedding (the cache matches questions to questions).
+
+    `app.embeddings.Embedder` exposes the asymmetric pair; tests and older code
+    may hand in a bare `TextEmbedding`, which only has `.embed`. Falling back
+    keeps both working -- and for symmetric models the two are identical anyway.
+    """
+    fn = getattr(embedder, "embed_query", None) or embedder.embed
+    return next(iter(fn([text])))
+
+
+
 @dataclass
 class CacheStats:
     hits: int = 0
@@ -73,7 +85,7 @@ class SemanticCache:
         self._clock += seconds
 
     def _embed(self, text: str) -> list[float]:
-        return np.asarray(next(self.embedder.embed([text])), dtype=np.float32).tolist()
+        return np.asarray(_embed_query(self.embedder, text), dtype=np.float32).tolist()
 
     # ── api ─────────────────────────────────────────────────────────────
     def get(self, tenant: str, question: str) -> CacheHit | None:

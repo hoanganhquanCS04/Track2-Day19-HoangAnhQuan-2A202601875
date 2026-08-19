@@ -40,13 +40,24 @@ class BackendSpec:
     dim: int
     provider: str       # fastembed | sentence-transformers | openai
     note: str = ""
+    # E5-family models are trained ASYMMETRICALLY: documents are seen as
+    # "passage: <text>" and questions as "query: <text>". Drop the prefixes and
+    # you are querying the model off-distribution -- it still returns vectors,
+    # nothing errors, the numbers are just worse. fastembed does NOT add them:
+    # `TextEmbedding.query_embed` / `.passage_embed` fall through to plain
+    # `embed()` for every ONNX model (only the Jina multitask class overrides
+    # them), so the prefixes have to live here.
+    query_prefix: str = ""
+    passage_prefix: str = ""
 
 
 BACKENDS: dict[str, BackendSpec] = {
     "fastembed": BackendSpec("BAAI/bge-small-en-v1.5", 384, "fastembed",
                              "English-focused; weak on Vietnamese paraphrase (that is the NB2 lesson)"),
     "multilingual": BackendSpec("intfloat/multilingual-e5-large", 1024, "fastembed",
-                                "Multilingual, no extra dependency, ~2.2 GB download"),
+                                "Multilingual, no extra dependency, ~2.2 GB download",
+                                query_prefix="query: ", passage_prefix="passage: "),
+    # bge-m3 is symmetric -- no prefixes, unlike the e5 family.
     "bge-m3": BackendSpec("BAAI/bge-m3", 1024, "sentence-transformers",
                           "Multilingual; needs sentence-transformers (requirements-full.txt)"),
     "openai": BackendSpec("text-embedding-3-small", 1536, "openai",
@@ -134,6 +145,20 @@ class Embedder:
                 raise RuntimeError("EMBEDDING_BACKEND=openai but OPENAI_API_KEY is unset.")
             self._impl = OpenAI()
         return self._impl
+
+    def embed_documents(self, texts: Iterable[str]) -> Iterator[np.ndarray]:
+        """Embed corpus documents (indexing side)."""
+        pre = self.spec.passage_prefix
+        return self.embed([pre + t for t in texts] if pre else texts)
+
+    def embed_query(self, texts: Iterable[str]) -> Iterator[np.ndarray]:
+        """Embed user questions (search side).
+
+        Must pair with `embed_documents` -- mixing a prefixed index with an
+        unprefixed query silently degrades every score.
+        """
+        pre = self.spec.query_prefix
+        return self.embed([pre + t for t in texts] if pre else texts)
 
     @staticmethod
     def _active_is_cuda(impl) -> bool:

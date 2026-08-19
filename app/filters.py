@@ -28,6 +28,18 @@ from app.search import Searcher
 FILTERED_COLLECTION = "lab19_filtered"
 
 
+def _embed_query(embedder, text: str):
+    """Query-side embedding, tolerant of a raw fastembed object.
+
+    `app.embeddings.Embedder` exposes the asymmetric pair; tests and older code
+    may hand in a bare `TextEmbedding`, which only has `.embed`. Falling back
+    keeps both working -- and for symmetric models the two are identical anyway.
+    """
+    fn = getattr(embedder, "embed_query", None) or embedder.embed
+    return next(iter(fn([text])))
+
+
+
 @dataclass
 class Result:
     """One strategy's answer for one query."""
@@ -114,7 +126,7 @@ class FilteredIndex:
         return idx
 
     def embed(self, query: str) -> np.ndarray:
-        return np.asarray(next(self.embedder.embed([query])), dtype=np.float32)
+        return np.asarray(_embed_query(self.embedder, query), dtype=np.float32)
 
     # ── ground truth ────────────────────────────────────────────────────
     def exact_top_k(self, qv: np.ndarray, predicate: Callable[[dict], bool], k: int) -> list[str]:
