@@ -25,7 +25,13 @@ from typing import Iterable, Iterator
 
 import numpy as np
 
+from app.gpu import cuda_available, setup_cuda_dlls
+
 DEFAULT_BACKEND = "fastembed"
+DEFAULT_DEVICE = "auto"        # auto | cpu | cuda
+# Registering the NVIDIA DLL dirs must happen before onnxruntime is first
+# imported, and importing this module is the earliest hook every path shares.
+setup_cuda_dlls()
 
 
 @dataclass(frozen=True)
@@ -51,7 +57,7 @@ BACKENDS: dict[str, BackendSpec] = {
 class Embedder:
     """Uniform `.embed(list[str]) -> Iterator[np.ndarray]`, matching fastembed."""
 
-    def __init__(self, backend: str | None = None) -> None:
+    def __init__(self, backend: str | None = None, device: str | None = None) -> None:
         name = (backend or os.getenv("EMBEDDING_BACKEND") or DEFAULT_BACKEND).strip().lower()
         if name not in BACKENDS:
             raise ValueError(
@@ -61,6 +67,22 @@ class Embedder:
         self.backend = name
         self.spec = BACKENDS[name]
         self._impl = None
+
+        dev = (device or os.getenv("EMBEDDING_DEVICE") or DEFAULT_DEVICE).strip().lower()
+        if dev not in {"auto", "cpu", "cuda"}:
+            raise ValueError(f"Unknown EMBEDDING_DEVICE={dev!r}. Valid: auto, cpu, cuda")
+        self.requested_device = dev
+        # `auto` must never turn a working CPU run into a crash, so it only
+        # upgrades when a CUDA session genuinely builds. `cuda` is explicit and
+        # is allowed to fail loudly -- that is the point of asking for it.
+        if self.spec.provider != "fastembed":
+            self.device = "cpu"          # only the fastembed path is wired for CUDA
+        elif dev == "cuda":
+            self.device = "cuda"
+        elif dev == "auto":
+            self.device = "cuda" if cuda_available() else "cpu"
+        else:
+            self.device = "cpu"
 
     # dimension is a property of the chosen model, never a hard-coded constant
     @property
@@ -77,7 +99,20 @@ class Embedder:
         p = self.spec.provider
         if p == "fastembed":
             from fastembed import TextEmbedding
-            self._impl = TextEmbedding(model_name=self.spec.model)
+            if self.device == "cuda":
+                # fastembed only WARNS when the CUDA provider fails and then
+                # runs on CPU, so verify afterwards instead of assuming.
+                self._impl = TextEmbedding(
+                    model_name=self.spec.model, cuda=True, device_ids=[0]
+                )
+                if self.requested_device == "cuda" and not self._active_is_cuda(self._impl):
+                    raise RuntimeError(
+                        "EMBEDDING_DEVICE=cuda but the CUDA provider did not load "
+                        "(fastembed fell back to CPU). Run `python -c "
+                        "'from app.gpu import describe; print(describe())'` to see why."
+                    )
+            else:
+                self._impl = TextEmbedding(model_name=self.spec.model)
         elif p == "sentence-transformers":
             try:
                 from sentence_transformers import SentenceTransformer
@@ -100,6 +135,14 @@ class Embedder:
             self._impl = OpenAI()
         return self._impl
 
+    @staticmethod
+    def _active_is_cuda(impl) -> bool:
+        """Ask the live ONNX session which provider it actually got."""
+        model = getattr(impl, "model", None)
+        sess = getattr(model, "model", None) if model is not None else None
+        get = getattr(sess, "get_providers", None)
+        return bool(get and "CUDAExecutionProvider" in get())
+
     def embed(self, texts: Iterable[str]) -> Iterator[np.ndarray]:
         texts = list(texts)
         impl = self._load()
@@ -117,4 +160,5 @@ class Embedder:
 
 def describe() -> str:
     e = Embedder()
-    return f"{e.backend} -> {e.model_name} ({e.dim}d) — {e.spec.note}"
+    return (f"{e.backend} -> {e.model_name} ({e.dim}d) on {e.device} "
+            f"— {e.spec.note}")

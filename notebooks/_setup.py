@@ -26,3 +26,14 @@ if str(_REPO_ROOT) not in sys.path:
 _BIN = Path(sys.executable).parent
 if str(_BIN) not in os.environ.get("PATH", "").split(os.pathsep):
     os.environ["PATH"] = f"{_BIN}{os.pathsep}{os.environ.get('PATH', '')}"
+
+# Register the NVIDIA DLL directories before anything imports onnxruntime.
+# Without this, onnxruntime-gpu loads its CUDA provider, fails to find
+# cublasLt64_13.dll, warns, and silently runs on CPU at ~50 ms/query instead
+# of ~7 ms. See app/gpu.py for the full explanation.
+try:
+    from app.gpu import setup_cuda_dlls
+
+    setup_cuda_dlls()
+except Exception:  # pragma: no cover — CPU-only machines must still work
+    pass
