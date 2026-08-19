@@ -38,15 +38,40 @@ NOW = datetime.now(timezone.utc).replace(microsecond=0)
 
 
 def make_user_profile(n_users: int = 100) -> pl.DataFrame:
+    """Two snapshots per user, so the offline store has actual HISTORY.
+
+    A feature store with one row per user cannot demonstrate anything: the
+    point-in-time join has only one candidate and always returns it, which is
+    indistinguishable from a plain `latest` join. Worse, with a single row a
+    user whose only snapshot is NEWER than the query timestamp drops out of
+    the result entirely -- correct PIT behaviour (the value did not exist yet)
+    that looks like a bug.
+
+    So each user gets a `last_week` snapshot and a `current` one. Now the join
+    has a real choice to make, and NB8's PIT-vs-latest comparison has
+    something to compare.
+    """
+    users = [f"u_{i:03d}" for i in range(n_users)]
+    speed = [180 + (i * 7) % 200 for i in range(n_users)]
+    lang = ["vi" if i % 3 != 0 else "en" for i in range(n_users)]
+    topics = ["ai_ml", "cloud", "security", "database", "devops"]
+    affinity = [topics[i % 5] for i in range(n_users)]
+
+    # Old snapshot: slower reader, affinity one cluster over -- deliberately
+    # DIFFERENT so a wrong-timestamp join is visible rather than silent.
+    old_ts = [NOW - timedelta(days=7) for _ in range(n_users)]
+    old_speed = [max(60, sp - 40) for sp in speed]
+    old_affinity = [topics[(i + 1) % 5] for i in range(n_users)]
+
+    # Current snapshot: staggered over the last 48 h, as a daily refresh would be.
+    cur_ts = [NOW - timedelta(hours=i % 48) for i in range(n_users)]
+
     return pl.DataFrame({
-        "user_id": [f"u_{i:03d}" for i in range(n_users)],
-        "reading_speed_wpm": [180 + (i * 7) % 200 for i in range(n_users)],
-        "preferred_language": ["vi" if i % 3 != 0 else "en" for i in range(n_users)],
-        "topic_affinity": [
-            ["ai_ml", "cloud", "security", "database", "devops"][i % 5]
-            for i in range(n_users)
-        ],
-        "event_timestamp": [NOW - timedelta(hours=i % 48) for i in range(n_users)],
+        "user_id": users + users,
+        "reading_speed_wpm": old_speed + speed,
+        "preferred_language": lang + lang,
+        "topic_affinity": old_affinity + affinity,
+        "event_timestamp": old_ts + cur_ts,
     })
 
 

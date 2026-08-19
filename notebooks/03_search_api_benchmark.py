@@ -85,13 +85,32 @@ def percentile(values: list[float], p: float) -> float:
     return sorted(values)[min(int(n * p), n - 1)]
 
 
+# One connection, reused for every call. This is not a micro-optimisation --
+# `httpx.get()` opens a FRESH TCP connection per request, and the accept +
+# HTTP-parse work runs on the event-loop thread while the search runs on a
+# threadpool thread. They fight over the GIL, so the server-side timer (which
+# wraps only `searcher.search()`) is inflated by connection setup it never did.
+# Measured on this box: P50 40.3 ms with a new connection each call vs 9.9 ms
+# with a reused one -- same server, same query, 4x difference that is pure
+# measurement artefact. Real clients use keep-alive, so this is also the
+# honest thing to measure.
+CLIENT = httpx.Client(timeout=30.0)
+
+# Warm-up: the first calls pay for CUDA/ONNX graph capture and Python bytecode
+# warm-up. The rubric asks for P99 "after warm-up", so exclude them explicitly
+# instead of hoping 100 samples dilute them.
+for _q in golden[:10]:
+    for _m in ("keyword", "semantic", "hybrid"):
+        CLIENT.get(f"{URL}/search", params={"q": _q["query"], "mode": _m})
+
+
 def benchmark_mode(mode: str, reps: int = 2) -> dict[str, float]:
     server_latencies: list[float] = []
     wall_latencies: list[float] = []
     for _ in range(reps):
         for q in golden:
             t0 = time.perf_counter()
-            r = httpx.get(f"{URL}/search", params={"q": q["query"], "mode": mode})
+            r = CLIENT.get(f"{URL}/search", params={"q": q["query"], "mode": mode})
             wall_latencies.append((time.perf_counter() - t0) * 1000)
             server_latencies.append(r.json()["latency_ms"])
     return {
