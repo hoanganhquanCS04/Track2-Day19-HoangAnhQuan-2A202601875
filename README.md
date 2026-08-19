@@ -68,6 +68,47 @@ make docker-clean    Docker: stop + wipe volumes
 
 ---
 
+## Tuỳ chọn: chạy embedding trên GPU (NVIDIA)
+
+Không bắt buộc. Lite path mặc định chạy CPU và mọi notebook đều pass — **trừ
+ngưỡng `P99 < 50 ms` của NB3 trên máy CPU chậm**. Lý do đo được trên máy này:
+
+```
+embed 1 query (CPU) : 50.2 ms   <- 94% ngân sách
+ANN (Qdrant, 1000d) :  1.8 ms
+BM25                :  1.5 ms
+```
+
+Tăng `threads` không cứu được (`threads=1` đã nhanh nhất; 12 thread còn tệ hơn) —
+đây là giới hạn cứng của một forward pass trên CPU. Bật GPU đưa embed về ~6 ms:
+
+```bash
+pip uninstall -y onnxruntime          # xung đột: cả hai cùng cung cấp module `onnxruntime`
+pip install onnxruntime-gpu
+pip install nvidia-cublas nvidia-cuda-runtime nvidia-cudnn-cu13             nvidia-cufft nvidia-curand
+```
+
+Rồi đặt `EMBEDDING_DEVICE=auto` (mặc định) hoặc `cuda` trong `.env`.
+
+> **Cạm bẫy:** cài `onnxruntime-gpu` là **chưa đủ**. DLL của CUDA provider link tới
+> `cublasLt64_13.dll` nằm trong `site-packages/nvidia/**/bin` — thư mục Windows
+> không tìm kiếm. onnxruntime in **một dòng warning** rồi **âm thầm chạy CPU**:
+> không crash, không lỗi, chỉ chậm gấp 9 lần. `app/gpu.py` đăng ký các thư mục
+> đó và `cuda_available()` **dựng thử một session CUDA thật** thay vì tin vào
+> `get_available_providers()` (hàm này trả `True` ngay cả khi thiếu sạch DLL).
+> Đặt `EMBEDDING_DEVICE=cuda` để lỗi nổ ra thay vì im lặng.
+
+Kiểm tra đang chạy trên gì:
+
+```bash
+python -c "from app.embeddings import describe; print(describe())"
+# fastembed -> BAAI/bge-small-en-v1.5 (384d) on cuda — ...
+```
+
+Đo được trên GTX 1660 Ti (6 GB, sm_75) / CUDA 13.3: hybrid P99 **82.2 ms → 12.9 ms**.
+
+---
+
 ## Quick Start — Docker (full stack)
 
 ```bash
