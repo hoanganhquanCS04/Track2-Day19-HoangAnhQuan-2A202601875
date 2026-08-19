@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import timedelta
 from pathlib import Path
 
-from feast import Entity, FeatureView, Field, FileSource, RequestSource
+from feast import Entity, FeatureView, Field, FileSource, RequestSource, ValueType
 from feast.types import Float64, Int64
 
 # GOTCHA (feast 0.65): `from feast import on_demand_feature_view` gives you the
@@ -25,7 +25,14 @@ from feast.on_demand_feature_view import on_demand_feature_view
 
 _HERE = Path(__file__).resolve().parent
 
-user = Entity(name="user", join_keys=["user_id"])
+# value_type is NOT optional here. pandas 2.x + pyarrow 25 write string
+# columns as arrow `large_string`; with no declared type feast infers the join
+# key as JSON and materialize dies with
+#   ValueError: Invalid JSON string for JSON type
+# ...raised deep inside type_map, naming neither the column nor the entity.
+# app/feast_repo/feature_views.py declares STRING on both entities, which is
+# exactly why that repo materializes and this one did not.
+user = Entity(name="user", join_keys=["user_id"], value_type=ValueType.STRING)
 
 user_spend_source = FileSource(
     name="user_spend_source",
